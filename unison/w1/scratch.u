@@ -18,57 +18,8 @@ server = do
   cache = IO.ref Map.empty
   serveSimple (routes cache) 8080
 
-client = do
-  histogram = IO.ref <| Histogram.hdr 6 10000 10
-
-  latency : '{Exception, Http} HttpResponse ->{IO, Exception, Http} HttpResponse
-  latency io =
-    start = Instant.now()
-    result = io()
-    end = Instant.now()
-    _ =
-      IO.ref.modify
-        histogram
-        (histogram -> between start end |> countMilliseconds |> toInt |> Nat.fromInt |> Optional.getOrBug "impossible" |> flip Histogram.observe histogram)
-    result
-
-  check = cases (line, n) ->
-    match Text.split ?\s line with
-      ["PUT", key, value] ->
-        printLine (Nat.toText n ++ ". Putting key " ++ key)
-        _ = latency <| do Http.put (parseOrBug ("http://localhost:8080/" ++ key)) (Body.fromText value)
-        ()
-      ["GET", key, "NOT_FOUND"] ->
-        printLine (Nat.toText n ++ ". Getting inexistent key " ++ key)
-        response = latency <| do Http.get (parseOrBug ("http://localhost:8080/" ++ key))
-        if Status.code <| HttpResponse.status response != 404 then
-          raise <| failure "Key found" key
-        else
-          ()
-      ["GET", key, value] ->
-        printLine (Nat.toText n ++ ". Getting key " ++ key)
-        response = latency <| do Http.get (parseOrBug ("http://localhost:8080/" ++ key))
-        if Status.code <| HttpResponse.status response != 200 then
-          raise <| failure "Key not found" key
-        else
-          value' = HttpResponse.body response |> Body.toBytes |> Text.fromUtf8
-          if value' != value then
-            raise <| failure "Key using wrong value" (key, value')
-          else ()
-      _ -> ()
-
-  printLine "Loading put.txt..."
-  spec = readFileUtf8 (FilePath "put.txt")
-  printLine "Running requests..."
-  Threads.run do
-    Http.run do
-      Text.split ?\n spec |> List.indexed |> List.foreach check
-  printLine "OK, done. Latencies (ms):"
-  printLine ("  - p50: " ++ (Ref.read histogram |> percentile 50.0 |> Nat.toFloat |> (n -> n / 1000.0) |> Float.toText))
-  printLine ("  - p95: " ++ (Ref.read histogram |> percentile 95.0 |> Nat.toFloat |> (n -> n / 1000.0) |> Float.toText))
-  printLine ("  - p99: " ++ (Ref.read histogram |> percentile 99.0 |> Nat.toFloat |> (n -> n / 1000.0) |> Float.toText))
-
 main = do
   kill = server()
-  _ = client()
+  printLine "Server running on port 8080. Press <enter> to stop."
+  _ = readLine()
   kill()
